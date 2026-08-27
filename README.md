@@ -17,10 +17,10 @@
 ### Good Point
 - 실제 업무 진행도뿐만 아니라 현재 내가 일을 하고 있다는 경험을 사용자에게 준다.
 
-
 ## Products
 1. 일정 추천 서비스(simple_tasks)
 2. 사용자 반응 기반 소설 자동화(make_novel)
+3. 기업 제도 기반 업무 추천 서비스(authority_docs)
 
 ## References
 - 기업과 개인 모두를 아우르는 소버린 AI 생태계 구축을 위한 업무 단계를 레고 블럭처럼 자동화할 수 있는 `Upstage Studio`
