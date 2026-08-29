@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rtk git add simpe-tasks/)",
+      "Bash(rtk git status --short simpe-tasks/)"
+    ]
+  }
+}

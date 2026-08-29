@@ -1,0 +1,14 @@
+scripts/.state/
+state.md
+state.md.bak
+todo.md
+
+# Python
+__pycache__/
+*.pyc
+
+# 로컬 설정
+.claude/settings.local.json
+
+# 업로드용 빌드 산출물
+/simple-tasks.zip
