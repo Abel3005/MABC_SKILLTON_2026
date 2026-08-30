@@ -23,6 +23,10 @@ def _empty_state():
         "active_token": None,
         # 직전에 완료한 항목의 맥락. 다음 카드의 "따뜻한 맥락" 가점에 쓴다.
         "last_context": [],
+        # 세션당 1회 받아 두는 캘린더 busy 구간. 시각 정보뿐이라 인코딩하지 않는다 —
+        # base64는 항목 이름을 모델에게서 가리려는 장치인데 여기엔 이름이 없다.
+        # 일정 제목은 애초에 받지 않는다.
+        "calendar_snapshot": None,
     }
 
 
@@ -33,14 +37,25 @@ def load(path):
     """
     p = Path(path)
 
-    # 새 JSON 파일이 없으면 기존 마크다운 마이그레이션 시도
+    # 새 JSON 파일이 없으면 예전 위치에서 옮겨 온다.
     if not p.exists():
-        # scripts/.state/tasks.json → scripts/ → 프로젝트 루트
         scripts_dir = Path(__file__).resolve().parent
+
+        # 예전에는 스킬 패키지 안(scripts/.state/)에 저장했다. 읽기 전용 설치에서
+        # 쓰기가 실패해 카드가 통째로 죽었기 때문에 홈 디렉터리로 옮겼다.
+        legacy_json = scripts_dir / ".state" / "tasks.json"
+        if legacy_json.exists() and legacy_json != p:
+            try:
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(legacy_json.read_text(encoding="utf-8"), encoding="utf-8")
+            except OSError:
+                # 옮기지 못해도 읽기는 된다. 그대로 읽어서 쓴다.
+                p = legacy_json
+
         old_md = scripts_dir.parent / "state.md"
-        if old_md.exists():
+        if not p.exists() and old_md.exists():
             _migrate_from_markdown(str(old_md), path)
-        else:
+        elif not p.exists():
             return _empty_state()
 
     # JSON 파일이 있으면 (마이그레이션 직후 포함) 읽기
@@ -53,6 +68,7 @@ def load(path):
     state = _empty_state()
     state["active_token"] = data.get("active_token")
     state["last_context"] = codec.decode_list(data.get("last_context")) or []
+    state["calendar_snapshot"] = data.get("calendar_snapshot")
 
     # open_card 디코딩
     if data.get("open_card"):
@@ -95,6 +111,7 @@ def save(path, state):
         "_encoding": "base64",
         "active_token": state.get("active_token"),
         "last_context": codec.encode_list(state.get("last_context") or []),
+        "calendar_snapshot": state.get("calendar_snapshot"),
     }
 
     # open_card 인코딩

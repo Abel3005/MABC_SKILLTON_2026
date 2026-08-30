@@ -32,6 +32,7 @@ REQUIRED = [
     "references/modes.md",
     "references/responses.md",
     "scripts/__init__.py",
+    "scripts/calendar_window.py",
     "scripts/codec.py",
     "scripts/harvest_processor.py",
     "scripts/item_matcher.py",
@@ -86,6 +87,16 @@ def check_sources(files):
     missing = [r for r in REQUIRED if r not in present]
     if missing:
         problems.append("필수 파일 누락: " + ", ".join(missing))
+
+    # 매니페스트에 없는 파일은 담지 않는다. 블랙리스트는 늘 한발 늦는다 — 실제로
+    # 테스트 잔재(_s/c.json, 활성 토큰까지 든 상태 파일)가 업로드 zip에 실려
+    # 나간 적이 있다. 무엇이 올라가는지 매번 정확히 알고 있어야 한다.
+    unexpected = sorted(present - set(REQUIRED) - set(OPTIONAL))
+    if unexpected:
+        problems.append(
+            "매니페스트에 없는 파일: " + ", ".join(unexpected)
+            + "  → 스킬에 필요하면 REQUIRED에 추가하고, 아니면 지운다"
+        )
 
     # 파이썬 파일이 실제로 컴파일되는지. 깨진 소스를 올리는 것이 없는 것보다 나쁘다.
     for rel, path in files:
@@ -192,11 +203,6 @@ def main():
     print(f"  필수 {len(REQUIRED)}건 전부 포함, 총 {len(names)}건")
     if optional_in:
         print(f"  선택 포함: {', '.join(optional_in)}")
-    if len(names) > len(REQUIRED) + len(optional_in):
-        extra = sorted(n for n in names
-                       if n.split("/", 1)[-1] not in REQUIRED + OPTIONAL)
-        if extra:
-            print(f"  그 외: {', '.join(extra[:5])}")
     print(f"  zip 내부 구조: {layout}")
     print("  플랫폼이 폴더째 받는 형식이면 --prefix 를 붙여 다시 만든다.")
 

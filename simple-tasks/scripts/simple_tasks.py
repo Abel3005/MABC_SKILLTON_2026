@@ -5,8 +5,10 @@
 
 import argparse
 import json
+import os
 import sys
-from datetime import datetime
+import tempfile
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # 스크립트를 직접 실행할 때 패키지 임포트가 가능하도록
@@ -23,14 +25,145 @@ from scripts import harvest_processor
 from scripts import token_manager
 from scripts import utterance_guard
 from scripts import item_matcher
+from scripts import calendar_window
 
 
 def _default_state_path():
-    return str(SCRIPT_DIR / ".state" / "tasks.json")
+    """상태 파일 경로.
+
+    **스킬 패키지 안에 쓰지 않는다.** 스킬은 읽기 전용으로 설치되는 경우가 많고,
+    그러면 저장이 실패해 카드가 통째로 죽는다. 실제로 그 사고가 났다 —
+    stdout이 0바이트로 나가서 런타임에서는 "스크립트가 없다"로 보였다.
+    """
+    override = os.environ.get("SIMPLE_TASKS_STATE")
+    if override:
+        return override
+    try:
+        return str(Path.home() / ".simple-tasks" / "tasks.json")
+    except (RuntimeError, OSError):
+        return str(Path(tempfile.gettempdir()) / "simple-tasks" / "tasks.json")
 
 
 def _output(data):
     print(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def _save(path, state, result):
+    """상태를 저장한다. **실패해도 카드를 버리지 않는다.**
+
+    이 스킬의 원칙 그대로다 — 상태가 한 세션 날아가는 것은 감수할 수 있는 손실이고
+    사용자가 빈 화면 앞에 있는 것은 감수할 수 없는 손실이다. 저장 실패로 카드를
+    죽이면 스크립트가 제 문서를 어기는 셈이 된다.
+    """
+    try:
+        state_manager.save(path, state)
+    except OSError as exc:
+        result["state_saved"] = False
+        result["state_error"] = f"{type(exc).__name__}: {exc}"
+
+
+def _store_calendar(state, now_text, busy_specs, clear=False):
+    """캘린더 스냅샷을 세션에 1회 저장한다.
+
+    커넥터 호출은 네트워크라 느리다. 세션마다 한 번만 받아 두고 이후 카드는
+    이 스냅샷으로 계산한다. busy 구간은 시간이 지나도 변하지 않으므로
+    파생값(남은 시간 등)이 아니라 구간 자체를 캐시한다.
+    """
+    if clear:
+        state["calendar_snapshot"] = None
+        return
+    if not busy_specs and not now_text:
+        return
+
+    local = datetime.now()
+    provided = calendar_window.parse_time(now_text) if now_text else None
+
+    # 사용자 시간대 오프셋. `--now`가 `+09:00`을 달고 오면 그것이 기준이 된다.
+    # busy 구간이 UTC('Z')로 와도 이 오프셋으로 변환해야 9시간 어긋나지 않는다.
+    offset_seconds = None
+    if provided is not None and provided.tzinfo is not None:
+        offset_seconds = provided.utcoffset().total_seconds()
+    else:
+        # `--now` 없이 `--busy`만 온 경우. 로컬 오프셋으로 둔다 — 구간이 `Z`로 오면
+        # 기준이 없을 때 9시간 어긋나므로, 모르는 것보다 로컬 기준이 낫다.
+        local_offset = local.astimezone().utcoffset()
+        if local_offset is not None:
+            offset_seconds = local_offset.total_seconds()
+
+    # 커넥터가 준 벽시계와 로컬 시계의 차이. 서버 타임존이 사용자와 달라도
+    # 모드 판정이 틀리지 않게 한다.
+    delta = 0.0
+    if provided is not None:
+        wall = calendar_window.naive(
+            provided,
+            timedelta(seconds=offset_seconds) if offset_seconds is not None else None,
+        )
+        delta = (wall - local).total_seconds()
+
+    state["calendar_snapshot"] = {
+        "fetched_at": local.isoformat(),
+        "clock_delta": delta,
+        "utc_offset": offset_seconds,
+        "busy": list(busy_specs or []),
+    }
+
+
+def _now_and_window(state):
+    """유효 현재 시각과 캘린더 창.
+
+    스냅샷이 없거나 오래됐으면 로컬 시각과 빈 창을 쓴다. **캘린더가 없어도
+    스킬은 완전히 동작한다.** 커넥터는 있으면 좋은 것이지 필수가 아니다.
+    """
+    snap = state.get("calendar_snapshot")
+    if not snap:
+        return datetime.now(), calendar_window.empty_window()
+
+    try:
+        fetched = datetime.fromisoformat(snap["fetched_at"])
+    except (KeyError, TypeError, ValueError):
+        return datetime.now(), calendar_window.empty_window()
+
+    if (datetime.now() - fetched).total_seconds() / 60 > calendar_window.TTL_MINUTES:
+        return datetime.now(), calendar_window.empty_window()
+
+    now = datetime.now() + timedelta(seconds=snap.get("clock_delta", 0))
+
+    offset_seconds = snap.get("utc_offset")
+    offset = timedelta(seconds=offset_seconds) if offset_seconds is not None else None
+    busy = calendar_window.parse_busy(snap.get("busy") or [], now, offset)
+    if not busy:
+        window = calendar_window.empty_window()
+        window["source"] = "calendar"
+        return now, window
+
+    window = calendar_window.analyze(busy, now)
+    window["source"] = "calendar"
+    return now, window
+
+
+def _session_context(state):
+    """현재 시각·모드·크기 보정·캘린더 창을 한 번에 계산한다."""
+    now, window = _now_and_window(state)
+
+    mode = calendar_window.apply_mode(
+        mode_detector.detect(now.hour, now.minute), window,
+    )
+
+    calibration = size_calibrator.calibrate(
+        state.get("rejection_log", []),
+        mode["default_size"],
+    )
+
+    # 캘린더 상한과 거부 로그 보정 중 작은 쪽을 쓴다.
+    tightened = size_calibrator.smaller_of(
+        calibration["adjusted_size"], window.get("ceiling"),
+    )
+    if tightened != calibration["adjusted_size"]:
+        calibration["adjusted_size"] = tightened
+        calibration["shrunk"] = True
+        calibration["limited_by_calendar"] = True
+
+    return now, mode, calibration, window
 
 
 def _pick_with_token(state, is_first, just_harvested=None):
@@ -38,12 +171,7 @@ def _pick_with_token(state, is_first, just_harvested=None):
 
     호출자가 이후에 state_manager.save를 반드시 호출해야 한다.
     """
-    now = datetime.now()
-    mode = mode_detector.detect(now.hour, now.minute)
-    calibration = size_calibrator.calibrate(
-        state.get("rejection_log", []),
-        mode["default_size"],
-    )
+    now, mode, calibration, window = _session_context(state)
 
     result = priority_engine.pick(
         state.get("open_items", []),
@@ -60,6 +188,7 @@ def _pick_with_token(state, is_first, just_harvested=None):
             "reason": "no_candidates",
             "mode": mode,
             "calibration": calibration,
+            "window": window,
         }
 
     token = token_manager.generate()
@@ -71,6 +200,7 @@ def _pick_with_token(state, is_first, just_harvested=None):
 
     result["mode"] = mode
     result["calibration"] = calibration
+    result["window"] = window
     result["token"] = token
     return result
 
@@ -81,12 +211,7 @@ def _token_for(state, item):
     사용자가 방금 이름을 말한 항목은 우선순위와 무관하게 그것이 카드가 되어야 한다.
     발화 자체가 가장 강한 신호이기 때문이다.
     """
-    now = datetime.now()
-    mode = mode_detector.detect(now.hour, now.minute)
-    calibration = size_calibrator.calibrate(
-        state.get("rejection_log", []),
-        mode["default_size"],
-    )
+    now, mode, calibration, window = _session_context(state)
 
     token = token_manager.generate()
     state["active_token"] = {
@@ -101,6 +226,7 @@ def _token_for(state, item):
         "why": priority_engine.why_for(item, state.get("last_context")),
         "mode": mode,
         "calibration": calibration,
+        "window": window,
         "token": token,
     }
 
@@ -109,14 +235,23 @@ def cmd_load(args):
     state = state_manager.load(args.state)
     session_info = session_controller.start_session(state)
     # 묵힘 해제 후 저장
-    state_manager.save(args.state, state)
+    _save(args.state, state, session_info)
     _output(session_info)
 
 
 def cmd_start(args):
     """load + pick --first 를 한 번에. 세션 시작용."""
     state = state_manager.load(args.state)
-    session_info = session_controller.start_session(state)
+
+    # 캘린더는 세션당 1회만 받는다. 이후 카드는 이 스냅샷으로 계산하므로
+    # 커넥터를 다시 부르지 않는다.
+    _store_calendar(state, args.now, args.busy, clear=args.no_calendar)
+    now, mode, calibration, window = _session_context(state)
+
+    session_info = session_controller.start_session(state, now=now)
+    session_info["mode"] = mode
+    session_info["calibration"] = calibration
+    session_info["window"] = window
 
     # 열린 카드가 있으면 이탈 회수가 먼저이므로 카드를 고르지 않는다
     if session_info["has_open_card"]:
@@ -124,14 +259,14 @@ def cmd_start(args):
     else:
         session_info["card"] = _pick_with_token(state, is_first=True)
 
-    state_manager.save(args.state, state)
+    _save(args.state, state, session_info)
     _output(session_info)
 
 
 def cmd_pick(args):
     state = state_manager.load(args.state)
     result = _pick_with_token(state, is_first=args.first)
-    state_manager.save(args.state, state)
+    _save(args.state, state, result)
     _output(result)
 
 
@@ -178,7 +313,7 @@ def cmd_complete(args):
         # "묵힘 아닌 항목이 하나도 없을 때는 수확한 것을 낸다"는 예외가 깨진다.
         result["card"] = _pick_with_token(state, is_first=False)
 
-    state_manager.save(args.state, state)
+    _save(args.state, state, result)
     _output(result)
 
 
@@ -200,31 +335,31 @@ def cmd_reject(args):
     if args.next:
         result["card"] = _pick_with_token(state, is_first=False)
 
-    state_manager.save(args.state, state)
+    _save(args.state, state, result)
     _output(result)
 
 
 def cmd_open_card(args):
     state = state_manager.load(args.state)
     result = session_controller.open_card(state, args.item)
-    state_manager.save(args.state, result["state"])
-    del result["state"]
+    state_only = result.pop("state")
+    _save(args.state, state_only, result)
     _output(result)
 
 
 def cmd_close_card(args):
     state = state_manager.load(args.state)
     result = session_controller.close_card(state)
-    state_manager.save(args.state, result["state"])
-    del result["state"]
+    state_only = result.pop("state")
+    _save(args.state, state_only, result)
     _output(result)
 
 
 def cmd_end_session(args):
     state = state_manager.load(args.state)
     result = session_controller.end_session(state)
-    state_manager.save(args.state, result["state"])
-    del result["state"]
+    state_only = result.pop("state")
+    _save(args.state, state_only, result)
     _output(result)
 
 
@@ -303,15 +438,13 @@ def cmd_add(args):
     if args.next:
         result["card"] = _token_for(state, item)
 
-    state_manager.save(args.state, state)
+    _save(args.state, state, result)
     _output(result)
 
 
 def cmd_status(args):
     state = state_manager.load(args.state)
-    from datetime import datetime
-    now = datetime.now()
-    mode = mode_detector.detect(now.hour, now.minute)
+    _, mode, _, window = _session_context(state)
 
     items_summary = [
         {"name": item["name"], "size": item.get("size"), "deadline": item.get("deadline")}
@@ -325,6 +458,7 @@ def cmd_status(args):
         "completed_count": len(state.get("completed", [])),
         "rejection_log_count": len(state.get("rejection_log", [])),
         "mode": mode,
+        "window": window,
     })
 
 
@@ -341,7 +475,13 @@ def main():
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # start
-    subparsers.add_parser("start", help="세션 시작 (load + 첫 카드 선택)")
+    start_parser = subparsers.add_parser("start", help="세션 시작 (load + 첫 카드 선택)")
+    start_parser.add_argument("--now",
+                               help="커넥터가 준 현재 시각(ISO). 서버 타임존이 달라도 모드가 맞는다")
+    start_parser.add_argument("--busy", action="append",
+                               help='캘린더 busy 구간. "11:00~11:40" 또는 ISO 쌍. 여러 번 쓸 수 있다')
+    start_parser.add_argument("--no-calendar", action="store_true",
+                               help="캐시된 캘린더 스냅샷을 버리고 시각만으로 판단한다")
 
     # load
     subparsers.add_parser("load", help="상태 파일 로드 및 세션 시작")
@@ -420,10 +560,23 @@ def main():
     }
 
     cmd_func = commands.get(args.command)
-    if cmd_func:
-        cmd_func(args)
-    else:
+    if not cmd_func:
         parser.print_help()
+        sys.exit(1)
+
+    # **stdout을 비운 채로 죽지 않는다.** 빈 출력은 런타임에서 "스크립트가 없다"로
+    # 읽히고, 모델은 원인을 찾으러 디렉터리를 뒤지기 시작한다. 실제로 그 사고가 났다.
+    # 무슨 일이 있어도 JSON 한 덩이는 나가야 한다.
+    try:
+        cmd_func(args)
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        _output({
+            "error": type(exc).__name__,
+            "message": str(exc),
+            "hint": "상태를 쓸 수 없으면 SIMPLE_TASKS_STATE로 쓰기 가능한 경로를 지정한다",
+        })
         sys.exit(1)
 
 

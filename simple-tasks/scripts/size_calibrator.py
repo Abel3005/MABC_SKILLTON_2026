@@ -22,6 +22,20 @@ def _shrink(size: str) -> str:
     return normalized
 
 
+def smaller_of(a: str, b: str | None) -> str:
+    """두 크기 중 작은 쪽.
+
+    거부 로그는 "이 사람은 크게 못 한다"를 말하고 캘린더는 "지금은 시간이 없다"를
+    말한다. 종류가 다른 제약이므로 곱하지 않고 둘 다 지킨다 — 즉 작은 쪽을 쓴다.
+    """
+    if not b:
+        return a
+    try:
+        return SIZE_ORDER[max(SIZE_ORDER.index(a), SIZE_ORDER.index(b))]
+    except ValueError:
+        return a
+
+
 def calibrate(rejection_log: list, base_size: str) -> dict:
     """거부 로그 최근 10건 분석하여 크기 보정.
 

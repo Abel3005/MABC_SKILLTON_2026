@@ -10,7 +10,7 @@ from . import size_calibrator
 from . import priority_engine
 
 
-def start_session(state: dict) -> dict:
+def start_session(state: dict, now: datetime | None = None) -> dict:
     """세션 시작: 묵힘 해제, 열린 카드 확인, 모드 판정.
 
     Returns:
@@ -24,7 +24,9 @@ def start_session(state: dict) -> dict:
             "muted_released": [str]
         }
     """
-    now = datetime.now()
+    # 캘린더가 준 시각이 있으면 그것을 쓴다. 서버 타임존이 사용자와 다르면
+    # 로컬 시각으로는 "오늘 마감"과 모드 판정이 둘 다 틀린다.
+    now = now or datetime.now()
     mode = mode_detector.detect(now.hour, now.minute)
 
     # 묵힘 해제
