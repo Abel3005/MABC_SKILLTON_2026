@@ -88,10 +88,14 @@ def record_response(state: dict, item_name: str, response: str,
         "reason": reason_text,
     })
 
-    # too_big_count 추적 (최근 연속 "너무 큼" 횟수)
+    # too_big_count 추적 (해당 항목의 최근 연속 "너무 큼" 횟수).
+    # 다른 항목의 로그는 건너뛴다. --next 로 카드가 이어지면 그 사이에 다른 항목의
+    # 거부가 끼어드는데, 그것 때문에 카운트가 리셋되면 "2회까지만" 규칙이 무너진다.
     too_big_count = 0
     for log in reversed(state.get("rejection_log", [])):
-        if log["name"] == item_name and log["reason"] == "너무 큼":
+        if log["name"] != item_name:
+            continue
+        if log["reason"] == "너무 큼":
             too_big_count += 1
         else:
             break

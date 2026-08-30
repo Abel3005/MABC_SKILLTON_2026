@@ -49,6 +49,7 @@ def _pick_with_token(state, is_first, just_harvested=None):
         calibration,
         is_first_card=is_first,
         just_harvested=just_harvested,
+        last_context=state.get("last_context"),
     )
 
     if result is None:
@@ -205,6 +206,10 @@ def cmd_add(args):
         "reentry": args.reentry,
         "muted": None,
         "needs_prep": False,
+        # 엣지 필드. 사용자가 발화한 것만 들어간다. 추론해서 채우지 않는다.
+        "context": args.context or [],
+        "blocks": args.blocks or [],
+        "spawned_by": args.spawned_by,
     }
     state.setdefault("open_items", []).append(item)
 
@@ -287,8 +292,13 @@ def main():
     add_parser.add_argument("item", help="항목 이름")
     add_parser.add_argument("--size", help="크기: S, M, L (기본: M)")
     add_parser.add_argument("--deadline", help="마감: 08-30 18:00")
-    add_parser.add_argument("--blocking", type=int, help="차단중 수")
+    add_parser.add_argument("--blocking", type=int, help="차단중 수 (이름을 모를 때만)")
     add_parser.add_argument("--reentry", help="재진입 메모")
+    add_parser.add_argument("--context", action="append",
+                             help="맥락 노드(파일·사람·도구). 여러 번 쓸 수 있다")
+    add_parser.add_argument("--blocks", action="append",
+                             help="이 항목이 막고 있는 항목명. 여러 번 쓸 수 있다")
+    add_parser.add_argument("--spawned-by", help="이 항목이 나온 부모 항목명")
     add_parser.add_argument("--next", action="store_true",
                              help="추가한 뒤 바로 카드를 고르고 토큰을 함께 반환")
     add_parser.add_argument("--first", action="store_true",

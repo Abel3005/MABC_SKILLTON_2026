@@ -21,6 +21,8 @@ def _empty_state():
         "completed": [],
         "rejection_log": [],
         "active_token": None,
+        # 직전에 완료한 항목의 맥락. 다음 카드의 "따뜻한 맥락" 가점에 쓴다.
+        "last_context": [],
     }
 
 
@@ -50,6 +52,7 @@ def load(path):
 
     state = _empty_state()
     state["active_token"] = data.get("active_token")
+    state["last_context"] = codec.decode_list(data.get("last_context")) or []
 
     # open_card 디코딩
     if data.get("open_card"):
@@ -91,6 +94,7 @@ def save(path, state):
         "_format": _FORMAT_VERSION,
         "_encoding": "base64",
         "active_token": state.get("active_token"),
+        "last_context": codec.encode_list(state.get("last_context") or []),
     }
 
     # open_card 인코딩
