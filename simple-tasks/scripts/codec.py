@@ -5,7 +5,7 @@
 
 import base64
 
-_TEXT_FIELDS = ("name", "reentry", "deadline", "muted", "spawned_by")
+_TEXT_FIELDS = ("name", "reentry", "deadline", "muted", "spawned_by", "source_utterance")
 
 # 엣지 필드. 항목 이름·맥락 이름이 그대로 들어가므로 원소 단위로 인코딩한다.
 _LIST_FIELDS = ("context", "blocks")

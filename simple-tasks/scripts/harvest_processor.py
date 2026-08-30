@@ -102,6 +102,8 @@ def harvest(state: dict, item_name: str,
             # 부모의 맥락을 물려받는다. 같은 파일·사람을 두고 떠오른 생각이기 때문이다.
             "context": list(parent_context),
             "blocks": [],
+            # 수확은 사용자가 직접 쓴 문장이므로 발화 검문 대상이 아니다.
+            "source_utterance": None,
         }
         state.setdefault("open_items", []).append(new_item)
         result["new_item"] = new_idea

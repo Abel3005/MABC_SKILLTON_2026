@@ -21,6 +21,8 @@ from scripts import priority_engine
 from scripts import session_controller
 from scripts import harvest_processor
 from scripts import token_manager
+from scripts import utterance_guard
+from scripts import item_matcher
 
 
 def _default_state_path():
@@ -71,6 +73,36 @@ def _pick_with_token(state, is_first, just_harvested=None):
     result["calibration"] = calibration
     result["token"] = token
     return result
+
+
+def _token_for(state, item):
+    """특정 항목에 토큰을 발급한다. `add --next`처럼 낼 카드가 이미 정해진 경우.
+
+    사용자가 방금 이름을 말한 항목은 우선순위와 무관하게 그것이 카드가 되어야 한다.
+    발화 자체가 가장 강한 신호이기 때문이다.
+    """
+    now = datetime.now()
+    mode = mode_detector.detect(now.hour, now.minute)
+    calibration = size_calibrator.calibrate(
+        state.get("rejection_log", []),
+        mode["default_size"],
+    )
+
+    token = token_manager.generate()
+    state["active_token"] = {
+        "hash": token_manager.hash_token(token),
+        "item": item["name"],
+        "created_at": now.isoformat(),
+    }
+
+    return {
+        "name": item["name"],
+        "reason": "requested",
+        "why": priority_engine.why_for(item, state.get("last_context")),
+        "mode": mode,
+        "calibration": calibration,
+        "token": token,
+    }
 
 
 def cmd_load(args):
@@ -198,29 +230,78 @@ def cmd_end_session(args):
 
 def cmd_add(args):
     state = state_manager.load(args.state)
-    item = {
-        "name": args.item,
-        "deadline": args.deadline,
-        "size": args.size or "M",
-        "blocking": args.blocking or 0,
-        "reentry": args.reentry,
-        "muted": None,
-        "needs_prep": False,
-        # 엣지 필드. 사용자가 발화한 것만 들어간다. 추론해서 채우지 않는다.
-        "context": args.context or [],
-        "blocks": args.blocks or [],
-        "spawned_by": args.spawned_by,
-    }
-    state.setdefault("open_items", []).append(item)
 
-    result = {
-        "action": "added",
-        "item": item,
-        "open_items_count": len(state["open_items"]),
-    }
+    # 1. 검문 — 발화에 근거가 없는 값을 벗겨낸다. 거부하지 않는다.
+    checked = utterance_guard.inspect(
+        args.item,
+        args.utterance,
+        deadline=args.deadline,
+        context=args.context or [],
+        strict=args.strict_name,
+    )
 
+    result = {}
+    if checked["report"]:
+        result["guard"] = checked["report"]
+
+    # 2. 매칭 — 이미 열려 있는 항목이면 새로 만들지 않는다.
+    #
+    # 매칭은 언제나 **발화에 근거가 남은 이름**으로 한다. `--strict-name`은 저장할
+    # 이름만 정할 뿐 매칭에는 관여하지 않는다. 모델이 "3분기 보고서 작성"을 넘겨도
+    # "보고서"로 매칭해야 기존 "3분기 보고서 초안"을 찾는다. 임계값을 낮춰서 풀면
+    # 관계없는 항목까지 걸리므로, 이름을 다듬어서 푸는 편이 안전하다.
+    match_name = checked["name"]
+    if args.utterance:
+        match_name = utterance_guard.trim_name(args.item, args.utterance)[0]
+
+    matched = None
+    if not args.no_match:
+        matched = item_matcher.find_match(match_name, state.get("open_items", []))
+
+    if matched:
+        item, how, score = matched
+
+        # 검문을 통과한 마감이 있고 기존 항목에 마감이 없으면 채운다.
+        if checked["deadline"] and not item.get("deadline"):
+            item["deadline"] = checked["deadline"]
+
+        # 같은 항목을 다른 경로로 부른 것이므로 맥락은 합친다.
+        merged = list(item.get("context") or [])
+        for ctx in checked["context"]:
+            if ctx not in merged:
+                merged.append(ctx)
+        item["context"] = merged
+
+        result.update({
+            "action": "matched",
+            "matched_by": how,
+            "score": score,
+            "item": item,
+        })
+    else:
+        item = {
+            "name": checked["name"],
+            "deadline": checked["deadline"],
+            "size": args.size or "M",
+            "blocking": args.blocking or 0,
+            "reentry": args.reentry,
+            "muted": None,
+            "needs_prep": False,
+            # 엣지 필드. 사용자가 발화한 것만 들어간다. 추론해서 채우지 않는다.
+            "context": checked["context"],
+            "blocks": args.blocks or [],
+            "spawned_by": args.spawned_by,
+            # 이 항목이 어느 발화에서 나왔는지. 나중에 값의 출처를 추적할 수 있다.
+            "source_utterance": args.utterance,
+        }
+        state.setdefault("open_items", []).append(item)
+        result.update({"action": "added", "item": item})
+
+    result["open_items_count"] = len(state.get("open_items", []))
+
+    # 사용자가 방금 이름을 말한 항목이므로 우선순위와 무관하게 이것이 카드가 된다.
     if args.next:
-        result["card"] = _pick_with_token(state, is_first=args.first)
+        result["card"] = _token_for(state, item)
 
     state_manager.save(args.state, state)
     _output(result)
@@ -299,6 +380,12 @@ def main():
     add_parser.add_argument("--blocks", action="append",
                              help="이 항목이 막고 있는 항목명. 여러 번 쓸 수 있다")
     add_parser.add_argument("--spawned-by", help="이 항목이 나온 부모 항목명")
+    add_parser.add_argument("--utterance",
+                             help="사용자 발화 원문. 검문과 매칭에 쓴다. 되도록 항상 넘긴다")
+    add_parser.add_argument("--no-match", action="store_true",
+                             help="기존 항목 매칭을 건너뛰고 새로 만든다")
+    add_parser.add_argument("--strict-name", action="store_true",
+                             help="발화에 없는 어절을 실제로 잘라낸다 (기본은 보고만)")
     add_parser.add_argument("--next", action="store_true",
                              help="추가한 뒤 바로 카드를 고르고 토큰을 함께 반환")
     add_parser.add_argument("--first", action="store_true",

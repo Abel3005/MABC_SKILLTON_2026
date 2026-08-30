@@ -158,6 +158,18 @@ def _score_subsequent_card(item: dict, last_context: list | None = None) -> floa
     return score
 
 
+def why_for(item: dict, last_context: list | None = None) -> dict:
+    """`이유` 줄에 쓸 사실. 그래프가 사용자 화면에 드러나는 유일한 지점이다.
+
+    비어 있으면 모델이 마감·시각으로 쓴다. 지어내지 않는다.
+    """
+    return {
+        "unblocks": list(item.get("blocks") or []),
+        "warm": _warm_context(item, last_context),
+        "spawned_by": item.get("spawned_by"),
+    }
+
+
 def pick(open_items: list, mode: dict, calibration: dict | None = None,
          is_first_card: bool = True, just_harvested: list | None = None,
          last_context: list | None = None) -> dict | None:
@@ -200,13 +212,7 @@ def pick(open_items: list, mode: dict, calibration: dict | None = None,
     return {
         "name": picked["name"],
         "reason": "picked",
-        # `이유` 줄에 쓸 사실. 그래프가 사용자 화면에 드러나는 유일한 지점이다.
-        # 비어 있으면 모델이 마감·시각으로 쓴다.
-        "why": {
-            "unblocks": list(picked.get("blocks") or []),
-            "warm": _warm_context(picked, last_context),
-            "spawned_by": picked.get("spawned_by"),
-        },
+        "why": why_for(picked, last_context),
         "score_detail": {
             "score": max_score,
             "is_first_card": is_first_card,

@@ -34,6 +34,7 @@ REQUIRED = [
     "scripts/__init__.py",
     "scripts/codec.py",
     "scripts/harvest_processor.py",
+    "scripts/item_matcher.py",
     "scripts/mode_detector.py",
     "scripts/priority_engine.py",
     "scripts/session_controller.py",
@@ -41,6 +42,7 @@ REQUIRED = [
     "scripts/size_calibrator.py",
     "scripts/state_manager.py",
     "scripts/token_manager.py",
+    "scripts/utterance_guard.py",
 ]
 
 # 있으면 함께 담지만 없어도 실패로 보지 않는다.
