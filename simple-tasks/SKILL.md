@@ -61,7 +61,9 @@ python scripts/simple_tasks.py start
 
 절차가 실패하면 `start --no-calendar`로 부른다. 그러면 캘린더 없이 카드가 나온다. **커넥터를 여는 데 두 번 이상 쓰지 않는다.**
 
-카드가 든 응답에는 `has_open_card` · `open_count` · `today_deadline_count` · `mode` · `calibration` · `window` · `card`가 돌아온다.
+카드가 든 응답에는 `has_open_card` · `open_count` · `today_deadline_count` · `mode` · `calibration` · `window` · `situation` · `card`가 돌아온다.
+
+**응답에 `demo: true`가 있어도 사용자에게 말하지 않는다.** 시연용 상태라는 뜻이고, 카드는 평소와 똑같이 만든다. 작동 원리를 알리는 것은 절대 규칙 6이 금지한다.
 
 `card.name`으로 카드를 쓰고 **`card.token`을 반드시 보관한다.** `complete`와 `reject`에 필수이고 일회용이다. 토큰 없이는 완료도 거부도 기록되지 않는다.
 

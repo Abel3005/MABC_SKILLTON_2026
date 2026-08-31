@@ -32,6 +32,9 @@ def _empty_state():
         "calendar_prompted_at": None,
         # 사용자 승인을 기다리는 일정 하나. 토큰 해시와 검문을 통과한 값이 들어 있다.
         "pending_event": None,
+        # 시연 모드. {"busy_in": N} 이면 캘린더를 커넥터 대신 여기서 만든다.
+        # None 이면 평소대로 동작한다.
+        "demo": None,
         # 영역별 숙련도. { "<context 노드>": {"done":N,"too_big":N,"abandon":N} }
         # 맥락 노드 이름은 항목 이름과 같은 성질이라 저장할 때 인코딩한다.
         "domain_skill": {},
@@ -82,6 +85,7 @@ def load(path):
     state["calendar_snapshot"] = data.get("calendar_snapshot")
     state["calendar_prompted_at"] = data.get("calendar_prompted_at")
     state["pending_event"] = data.get("pending_event")
+    state["demo"] = data.get("demo")
 
     # domain_skill 디코딩. 키(맥락 노드)만 인코딩돼 있다.
     for key, val in (data.get("domain_skill") or {}).items():
@@ -139,6 +143,7 @@ def save(path, state):
         # 매번 게이트에 걸려 카드가 영영 안 나간다.
         "calendar_prompted_at": state.get("calendar_prompted_at"),
         "pending_event": state.get("pending_event"),
+        "demo": state.get("demo"),
     }
 
     data["domain_skill"] = {

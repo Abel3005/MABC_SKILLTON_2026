@@ -72,6 +72,11 @@ def _should_gate_on_calendar(state, args):
     if args.no_calendar or args.busy or args.now:
         return False
 
+    # 시연 모드에서는 커넥터를 부르지 않는다. 심어둔 창을 쓰는 것이 요점인데
+    # 게이트가 걸리면 모델이 진짜 캘린더를 읽어 와 그것을 덮어쓴다.
+    if state.get("demo"):
+        return False
+
     prompted = state.get("calendar_prompted_at")
     if prompted:
         try:
@@ -178,12 +183,43 @@ def _store_calendar(state, now_text, busy_specs, clear=False):
     }
 
 
+def _demo_window(state, now):
+    """시연 모드의 캘린더 창. **매번 지금 기준으로 다시 만든다.**
+
+    심어둔 스냅샷을 그냥 두면 두 타이머에 걸려 데모가 스스로 풀린다 —
+    스냅샷 TTL 15분이 지나면 창이 비고, 게이트 쿨다운 10분이 지나면 모델이
+    진짜 캘린더를 읽어 와 덮어쓴다. 둘 다 실사용에서는 옳지만 아무 때나 돌리는
+    시연에서는 틀리다. 그래서 저장하는 것은 구간이 아니라 **`지금부터 N분 뒤`**이고,
+    읽을 때마다 계산한다. 몇 시에 돌리든 같은 화면이 나온다.
+    """
+    conf = state.get("demo") or {}
+    busy_in = conf.get("busy_in")
+    if busy_in is None:
+        return None
+
+    start = now + timedelta(minutes=busy_in)
+    end = start + timedelta(minutes=60)
+    later = end + timedelta(minutes=150)
+    window = calendar_window.analyze(
+        [(start, end), (later, later + timedelta(minutes=30))], now,
+    )
+    # `calendar`가 아니라 `demo`다. 진짜 캘린더에서 온 값과 구별되어야 한다.
+    window["source"] = "demo"
+    return window
+
+
 def _now_and_window(state):
     """유효 현재 시각과 캘린더 창.
 
     스냅샷이 없거나 오래됐으면 로컬 시각과 빈 창을 쓴다. **캘린더가 없어도
     스킬은 완전히 동작한다.** 커넥터는 있으면 좋은 것이지 필수가 아니다.
     """
+    if state.get("demo"):
+        now = datetime.now()
+        demo = _demo_window(state, now)
+        if demo is not None:
+            return now, demo
+
     snap = state.get("calendar_snapshot")
     if not snap:
         return datetime.now(), calendar_window.empty_window()
@@ -410,6 +446,8 @@ def cmd_start(args):
 
     session_info = session_controller.start_session(state, now=now)
     session_info["build"] = BUILD
+    if state.get("demo"):
+        session_info["demo"] = True
     session_info["situation"] = _situation(state, now, window)
     session_info["mode"] = mode
     session_info["calibration"] = calibration
@@ -835,6 +873,14 @@ def cmd_seed(args):
     """
     state = state_manager.load(args.state)
 
+    if args.off:
+        state["demo"] = None
+        result = {"build": BUILD, "ok": True, "demo": False,
+                  "note": "시연 모드를 껐다. 항목은 그대로 두고 캘린더만 실제 커넥터를 쓴다."}
+        _save(args.state, state, result)
+        _output(result)
+        return
+
     if state.get("open_items") and not args.force:
         _output({
             "build": BUILD,
@@ -860,25 +906,12 @@ def cmd_seed(args):
     state["last_context"] = ["서류함", "보험앱"]
     state["rejection_log"] = []
 
-    # 캘린더 스냅샷도 함께 심는다. 커넥터 없이도 창 계산과 크기 상한이 보인다.
-    # 하루에 일정이 하나뿐인 사람은 드물어서 오후 것도 함께 둔다 — 다음 일정만
-    # 보이면 창이 왜 좁은지는 알아도 하루가 어떤 모양인지는 안 보인다.
-    if args.busy_in is not None:
-        start = now + timedelta(minutes=args.busy_in)
-        end = start + timedelta(minutes=60)
-        later_start = end + timedelta(minutes=150)
-        later_end = later_start + timedelta(minutes=30)
-        state["calendar_snapshot"] = {
-            "fetched_at": now.isoformat(),
-            "clock_delta": 0.0,
-            "utc_offset": (now.astimezone().utcoffset() or timedelta()).total_seconds(),
-            "busy": [
-                f"{start:%H:%M}~{end:%H:%M}",
-                f"{later_start:%H:%M}~{later_end:%H:%M}",
-            ],
-        }
-        # 캘린더를 이미 받은 상태이므로 맨몸 `start`가 게이트에 걸리지 않는다.
-        state["calendar_prompted_at"] = now.isoformat()
+    # **스냅샷을 심지 않고 시연 모드를 켠다.** 스냅샷은 15분이면 만료되고
+    # 게이트 쿨다운은 10분이면 풀려서, 데모가 조용히 진짜 캘린더로 바뀐다.
+    # 시연 모드는 `지금부터 N분 뒤`만 저장하고 읽을 때마다 다시 계산한다.
+    state["calendar_snapshot"] = None
+    state["calendar_prompted_at"] = None
+    state["demo"] = {"busy_in": args.busy_in} if args.busy_in is not None else {}
 
     _, mode, calibration, window = _session_context(state)
 
@@ -892,7 +925,9 @@ def cmd_seed(args):
         "mode": mode,
         "calibration": calibration,
         "window": window,
-        "note": "시연용 데이터다. 지우려면 상태 파일을 삭제한다.",
+        "demo": True,
+        "note": "시연용 데이터다. 캘린더 커넥터를 부르지 않고 심어둔 창을 쓴다. "
+                "실제 캘린더로 돌아가려면 seed --off, 전부 지우려면 상태 파일을 삭제한다.",
     }
     _save(args.state, state, result)
     _output(result)
@@ -1022,6 +1057,8 @@ def main():
                               help="기존 항목이 있어도 덮어쓴다")
     seed_parser.add_argument("--busy-in", type=int, default=40,
                               help="지금부터 N분 뒤에 60분짜리 일정을 둔다 (기본 40)")
+    seed_parser.add_argument("--off", action="store_true",
+                              help="시연 모드를 끈다. 항목은 두고 캘린더만 실제 커넥터로 돌린다")
 
     args = parser.parse_args()
 

@@ -321,9 +321,11 @@ python scripts/simple_tasks.py start --now "2026-08-30T10:20:00+09:00" \
   "ceiling": "small",          // 남은 시간이 정하는 크기 상한
   "in_event": false,
   "remaining_today": 2,        // 오늘 아직 안 끝난 일정 수 (진행 중인 것 포함)
-  "source": "calendar"         // "none"이면 캘린더 없음
+  "source": "calendar"         // "none" 캘린더 없음 · "demo" 시연 모드
 }
 ```
+
+`source`가 `"demo"`면 커넥터에서 온 값이 아니라 `seed`가 만든 것이다. 시연 모드에서는 캘린더 게이트가 걸리지 않고 커넥터도 불리지 않는다.
 
 ### 반환하는 `grain`
 
