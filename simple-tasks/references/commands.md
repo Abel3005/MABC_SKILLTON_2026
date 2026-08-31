@@ -239,12 +239,49 @@ python scripts/simple_tasks.py end-session         # 세션 종료
 
 스크립트는 네트워크를 쓰지 않는다. **커넥터는 모델이 호출하고 결과만 인자로 넘어온다.** `--utterance`와 같은 방식이다.
 
+### 커넥터를 찾는 경로
+
+**Composio 계열 도구는 세션 시작 시점에 도구 목록에 없다.** 그래서 "`GOOGLECALENDAR_*`가 보이면"으로 판단하면 **언제나 거짓**이 되어 캘린더가 영영 안 붙는다. 열어야 나온다.
+
+```
+load_tools(categories=["store"])
+```
+
+이걸 부르면 `composio_search_tools`, `composio_execute`가 열린다. `store` 범주에 들어 있어서 문서·훅 같은 다른 범주만 열면 나오지 않는다.
+
+그다음은 곧바로 실행이다. **탐색을 먼저 하지 않는다.**
+
+```
+composio_execute(
+  tool="GOOGLECALENDAR_FIND_FREE_SLOTS",
+  args="{\"time_min\": \"2026-08-30T00:00:00+09:00\",
+          \"time_max\": \"2026-08-30T23:59:59+09:00\",
+          \"items\": [{\"id\": \"primary\"}]}")
+```
+
+**`args`는 객체가 아니라 JSON 문자열이다.** 객체로 넘기면 실패한다. 날짜와 오프셋만 오늘 것으로 바꾸고 나머지는 그대로 쓴다.
+
+**`LIST_CALENDARS`를 부르지 않는다.** 목록을 먼저 확인하고 싶어지는 자리이고, 실제로 모델이 반복해서 거기로 샌다. 왕복이 늘 뿐 아니라 응답 첫머리가 "대한민국의 휴일" 같은 구독 캘린더로 채워지고, 종일 일정이 busy로 잡히면 하루가 통째로 최소 크기가 된다. `EVENTS_LIST`·`ACL_LIST`도 마찬가지로 1순위가 아니다.
+
+**실행이 실패했을 때만** 이름을 확인한다.
+
+```
+composio_search_tools(toolkits=["googlecalendar"],
+                      search="free busy", include_schemas=true)
+```
+
+연결된 toolkit과 도구 목록이 스키마와 함께 온다. **`search`는 `"free busy"`로 고정이다** — `"calendar list"`처럼 바꾸면 목록 조회 도구가 상위에 오고, 그게 방금 막은 경로다. `include_schemas=true`로 파라미터를 확인한다. 파라미터가 `max_results`, `show_deleted`처럼 snake_case인 경우가 있다. 실측 기준 `googlecalendar`에 23개가 노출된다.
+
+어디서 막히든 **재시도하지 않고 캘린더 없이 진행한다.** 커넥터를 여는 데 턴을 쓰면 카드가 늦어지고, 늦은 카드는 이 스킬이 지는 방식이다.
+
 ```bash
-# GOOGLECALENDAR_GET_CURRENT_DATE_TIME → --now
-# GOOGLECALENDAR_FIND_FREE_SLOTS       → busy 구간마다 --busy
+# --now  → 이 턴에 아는 현재 시각. 오프셋을 붙인다
+# --busy → FIND_FREE_SLOTS 가 준 busy 구간마다 하나씩
 python scripts/simple_tasks.py start --now "2026-08-30T10:20:00+09:00" \
   --busy "09:00~10:00" --busy "11:00~11:40"
 ```
+
+**`--now` 때문에 커넥터를 한 번 더 부르지 않는다.** `FIND_FREE_SLOTS`의 `time_min`을 쓰려면 어차피 오늘 날짜를 알아야 하고, 같은 시계를 `--now`에도 쓰면 둘이 어긋나지 않는다. 사용자의 시간대를 모를 때만 `GOOGLECALENDAR_GET_CURRENT_DATE_TIME`을 부른다.
 
 `--busy`는 `"HH:MM~HH:MM"` 또는 ISO 쌍을 받는다. 파싱되지 않는 구간은 조용히 버린다 — 캘린더 때문에 카드가 안 나가면 안 된다.
 
@@ -258,9 +295,9 @@ python scripts/simple_tasks.py start --now "2026-08-30T10:20:00+09:00" \
 
 ### busy 구간을 어디서 얻나
 
-`FIND_FREE_SLOTS`가 1순위다. **쓰기 전에 그 도구가 실제로 활성화돼 있는지 확인한다** — 커넥터마다 노출되는 도구 집합이 다르다.
+`FIND_FREE_SLOTS`가 1순위다. **활성화돼 있는지 미리 확인하지 않는다** — 그냥 부르고, 없으면 그때 실패가 알려준다. 확인 단계를 두면 그 자리에서 목록 조회로 새는 것이 반복해서 관측됐다.
 
-없으면 `EVENTS_LIST`로 대체하되 **시작·종료 시각만 뽑아 `--busy`로 넘긴다.** 제목·참석자·설명은 버린다. `--busy`에는 제목을 담을 자리가 아예 없으므로 **인터페이스 자체가 경계선이다** — 도구가 제목을 돌려줘도 상태 파일에 들어갈 수 없다.
+실패했으면 `EVENTS_LIST`로 대체하되 **시작·종료 시각만 뽑아 `--busy`로 넘긴다.** 제목·참석자·설명은 버린다. `--busy`에는 제목을 담을 자리가 아예 없으므로 **인터페이스 자체가 경계선이다** — 도구가 제목을 돌려줘도 상태 파일에 들어갈 수 없다.
 
 `EVENTS_LIST`를 쓸 때 주의할 것:
 

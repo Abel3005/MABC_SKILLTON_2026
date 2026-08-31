@@ -26,6 +26,62 @@ from scripts import token_manager
 from scripts import utterance_guard
 from scripts import item_matcher
 from scripts import calendar_window
+# from scripts import event_builder   # 결선 이후. 아래 "일정 등록" 주석 블록과 함께 푼다.
+
+
+# 배포 표식. 모든 `start` 출력에 실린다.
+#
+# **왜 필요한가.** SKILL.md를 고쳐도 zip을 다시 묶지 않으면 런타임에는 옛 스킬이
+# 남는다. 실제로 그 상태로 세 번의 트레이스를 원인 분석하는 데 썼고, 트레이스만
+# 봐서는 배포본이 무엇인지 알 방법이 없었다. 출력에 한 줄 실으면 즉시 판별된다.
+BUILD = "2026-08-30.calendar-gate"
+
+# 캘린더 절차를 한 번 돌려준 뒤 이 시간 안에 다시 맨몸 `start`가 오면
+# 카드를 그냥 낸다. 커넥터가 없는 런타임에서 무한 왕복이 되지 않게 하는 안전장치다.
+_PROMPT_COOLDOWN_SECONDS = 600
+
+# 맨몸 `start`에 돌려주는 절차.
+#
+# **산문이 아니라 도구 출력으로 옮긴 이유.** SKILL.md의 캘린더 절은 실측 트레이스
+# 세 건에서 단 한 번도 실행되지 않았다. `load_tools` 호출이 0회였다. 캘린더가 실제로
+# 불린 것은 사용자가 캘린더를 직접 물어본 세션뿐이었다. 모델은 턴 맨 앞에서 한 번 읽은
+# 23KB 문서보다 눈앞의 도구 출력을 따른다. 그래서 지시를 출력에 싣는다.
+_CALENDAR_STEPS = {
+    "why": "캘린더를 아직 읽지 않았다. busy 구간이 있으면 카드의 크기와 이유가 달라진다.",
+    "do": [
+        'load_tools(categories=["store"])',
+        'composio_execute(tool="GOOGLECALENDAR_FIND_FREE_SLOTS", '
+        'args="{\\"time_min\\": \\"<오늘>T00:00:00<오프셋>\\", '
+        '\\"time_max\\": \\"<오늘>T23:59:59<오프셋>\\", '
+        '\\"items\\": [{\\"id\\": \\"primary\\"}]}")',
+        'start --now "<지금+오프셋>" --busy "HH:MM~HH:MM" (busy 구간마다 하나씩)',
+    ],
+    "do_not": [
+        "LIST_CALENDARS, EVENTS_LIST, ACL_LIST 를 먼저 부르지 않는다",
+        "composio_search_tools 로 먼저 찾지 않는다. 실패했을 때만 내려간다",
+        "사용자에게 허락을 묻지 않는다",
+    ],
+    "if_it_fails": 'start --no-calendar 로 다시 부른다. 그러면 카드가 나온다. '
+                   '커넥터를 여는 데 두 번 이상 쓰지 않는다.',
+}
+
+
+def _should_gate_on_calendar(state, args):
+    """맨몸 `start`인가. 이미 한 번 절차를 돌려줬으면 더 막지 않는다."""
+    if args.no_calendar or args.busy or args.now:
+        return False
+
+    prompted = state.get("calendar_prompted_at")
+    if prompted:
+        try:
+            when = datetime.fromisoformat(prompted)
+        except (TypeError, ValueError):
+            when = None
+        if when is not None:
+            elapsed = (datetime.now() - when).total_seconds()
+            if 0 <= elapsed < _PROMPT_COOLDOWN_SECONDS:
+                return False
+    return True
 
 
 def _default_state_path():
@@ -45,7 +101,20 @@ def _default_state_path():
 
 
 def _output(data):
-    print(json.dumps(data, ensure_ascii=False, indent=2))
+    """JSON 한 덩이를 stdout으로. **인코딩 때문에 죽지 않는다.**
+
+    윈도우 콘솔은 cp949인 경우가 있고 `—`나 이모지가 하나만 섞여도 `print`가
+    UnicodeEncodeError로 죽는다. 그러면 stdout이 비고 런타임에는 "스크립트가 없다"로
+    보인다 — 이 스킬이 이미 한 번 그렇게 죽었다. 항목 이름은 사용자가 치는 것이므로
+    좁은 콘솔에서 못 쓸 문자가 들어올 수 있다. 그때는 이스케이프해서라도 내보낸다.
+    """
+    text = json.dumps(data, ensure_ascii=False, indent=2)
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        text.encode(encoding)
+    except (UnicodeEncodeError, LookupError):
+        text = json.dumps(data, ensure_ascii=True, indent=2)
+    print(text)
 
 
 def _save(path, state, result):
@@ -246,9 +315,27 @@ def cmd_start(args):
     # 캘린더는 세션당 1회만 받는다. 이후 카드는 이 스냅샷으로 계산하므로
     # 커넥터를 다시 부르지 않는다.
     _store_calendar(state, args.now, args.busy, clear=args.no_calendar)
+
+    # 맨몸 `start`면 카드를 미루고 절차만 돌려준다. **카드를 함께 주면 안 된다** —
+    # 절대 규칙 1이 "카드가 있으면 즉시 낸다"이므로, 카드가 응답에 들어 있는 한
+    # 모델은 절차를 읽지 않고 그것을 낸다. 카드를 빼는 것이 지시를 읽게 만드는
+    # 유일한 방법이다. 커넥터가 실패하면 `--no-calendar`로 곧바로 회수된다.
+    if _should_gate_on_calendar(state, args):
+        state["calendar_prompted_at"] = datetime.now().isoformat()
+        gated = {
+            "build": BUILD,
+            "card": None,
+            "reason": "calendar_first",
+            "next_action": _CALENDAR_STEPS,
+        }
+        _save(args.state, state, gated)
+        _output(gated)
+        return
+
     now, mode, calibration, window = _session_context(state)
 
     session_info = session_controller.start_session(state, now=now)
+    session_info["build"] = BUILD
     session_info["mode"] = mode
     session_info["calibration"] = calibration
     session_info["window"] = window
@@ -262,6 +349,130 @@ def cmd_start(args):
     _save(args.state, state, session_info)
     _output(session_info)
 
+
+# ---------------------------------------------------------------------------
+# 일정 등록(캘린더 쓰기) — **결선 이후 사용.** 공모전 제출 범위는 카드 흐름과
+# 항목 그래프까지다. 되살리려면 아래 주석을 풀고, 29행의 event_builder import,
+# schedule 서브파서, commands 의 "schedule" 항목을 함께 풀고,
+# build_skill.py 의 DEFERRED 에 있는 scripts/event_builder.py 를 REQUIRED 로 옮긴다.
+# 설계 근거는 references/design-notes.md 의 "일정 등록 턴" 절에 있다.
+# ---------------------------------------------------------------------------
+# def _event_overlaps(state, start, end):
+#     """등록하려는 구간이 캐시된 busy 구간과 겹치는가.
+#
+#     스냅샷이 없으면 판정하지 않는다. 겹침은 막는 근거가 아니라 확인 문구에
+#     띄우는 정보다 — 겹치는 일정을 일부러 넣는 경우가 있다.
+#     """
+#     snap = state.get("calendar_snapshot")
+#     if not snap:
+#         return False
+#
+#     offset_seconds = snap.get("utc_offset")
+#     offset = timedelta(seconds=offset_seconds) if offset_seconds is not None else None
+#     busy = calendar_window.parse_busy(snap.get("busy") or [], datetime.now(), offset)
+#     if not busy:
+#         return False
+#
+#     return event_builder.overlaps_busy(
+#         calendar_window.naive(start, offset),
+#         calendar_window.naive(end, offset),
+#         busy,
+#     )
+#
+#
+# def _already_scheduled(state, fields):
+#     """같은 제목·같은 시작 시각이 이미 기록돼 있는가."""
+#     for entry in state.get("scheduled_events") or []:
+#         if entry.get("summary") == fields["summary"] and entry.get("start") == fields["start"]:
+#             return True
+#     return False
+#
+#
+# def cmd_schedule(args):
+#     """사용자가 말한 일정을 캘린더에 등록할 준비를 한다.
+#
+#     **스크립트가 캘린더에 쓰지 않는다.** 검문하고, 확인 문구를 만들고, 커넥터에
+#     넘길 인자를 조립해서 돌려줄 뿐이다. 실제 쓰기는 사용자가 승인한 뒤 모델이 한다.
+#     """
+#     state = state_manager.load(args.state)
+#
+#     if args.commit:
+#         _commit_event(args, state)
+#         return
+#
+#     vetted = event_builder.vet(args.utterance, args.title, args.start, args.end, args.now)
+#     if not vetted["ok"]:
+#         _output({"build": BUILD, **vetted})
+#         return
+#
+#     fields = event_builder.build_fields(vetted["title"], vetted["start"], vetted["end"])
+#
+#     token = token_manager.generate()
+#     state["pending_event"] = {
+#         "hash": token_manager.hash_token(token),
+#         "fields": fields,
+#         "created_at": datetime.now().isoformat(),
+#     }
+#
+#     result = {
+#         "build": BUILD,
+#         "ok": True,
+#         "confirm": event_builder.confirm_text(
+#             vetted["title"], vetted["start"], vetted["end"],
+#             end_defaulted=vetted["end_defaulted"],
+#             in_past=vetted["in_past"],
+#             overlaps=_event_overlaps(state, vetted["start"], vetted["end"]),
+#         ),
+#         "already_scheduled": _already_scheduled(state, fields),
+#         "must_confirm": "confirm 문구를 선택지 도구로 그대로 띄운다. "
+#                         "사용자가 승인하기 전에는 실행하지 않는다.",
+#         "execute": {
+#             "tool": "GOOGLECALENDAR_CREATE_EVENT",
+#             "args": event_builder.build_args(fields),
+#             "fields": fields,
+#             "if_rejected": "파라미터 이름이 다르면 composio_search_tools(toolkits=[\"googlecalendar\"], "
+#                            "search=\"create event\", include_schemas=true)로 확인하고 fields의 "
+#                            "값을 그 이름으로 옮긴다. **값은 바꾸지 않는다** — 검문을 통과한 것이 이 값들이다.",
+#         },
+#         "then": 'schedule --commit --token "<위 token>" --event-id "<응답의 id>"',
+#         "token": token,
+#     }
+#     if vetted["report"]:
+#         result["guard"] = vetted["report"]
+#
+#     _save(args.state, state, result)
+#     _output(result)
+#
+#
+# def _commit_event(args, state):
+#     """등록이 끝난 일정을 기록한다. 중복 등록을 막고 주간 회고에 쓴다."""
+#     pending = state.get("pending_event")
+#     if not pending:
+#         _output({"build": BUILD, "error": "no_pending_event",
+#                  "message": "schedule 을 먼저 실행하세요"})
+#         sys.exit(1)
+#
+#     if not args.token or not token_manager.validate(args.token, pending.get("hash")):
+#         _output({"build": BUILD, "error": "invalid_token", "message": "잘못된 토큰입니다"})
+#         sys.exit(1)
+#
+#     entry = dict(pending.get("fields") or {})
+#     entry["event_id"] = args.event_id
+#     entry["recorded_at"] = datetime.now().isoformat()
+#
+#     state.setdefault("scheduled_events", []).append(entry)
+#     state["pending_event"] = None
+#
+#     result = {
+#         "build": BUILD,
+#         "ok": True,
+#         "recorded": entry,
+#         "scheduled_count": len(state["scheduled_events"]),
+#     }
+#     _save(args.state, state, result)
+#     _output(result)
+#
+#
 
 def cmd_pick(args):
     state = state_manager.load(args.state)
@@ -442,6 +653,123 @@ def cmd_add(args):
     _output(result)
 
 
+def _demo_items(today):
+    """시연용 항목. 그래프 세 종류가 전부 한 번씩 드러나도록 짰다.
+
+    - `context` 겹침 → 직전 완료 항목과 같은 파일을 쓰는 항목에 따뜻한 맥락 가점
+    - `blocks`      → "이거 끝나면 무엇이 풀리는지"를 `이유` 줄에 이름으로 쓸 수 있다
+    - `spawned_by`  → 수확이 만든 엣지
+
+    **실제 사용자 데이터가 아니다.** `seed`로만 들어오고, 발화에서 온 값이 아니므로
+    `source_utterance`를 비워 둔다. 검문을 통과한 값과 구별되어야 한다.
+    """
+    return [
+        {
+            "name": "3분기 실적 보고서 초안", "deadline": today, "size": "L",
+            "blocking": 0, "reentry": "표 3번부터", "muted": None, "needs_prep": False,
+            "context": ["실적보고서.xlsx", "김팀장"],
+            "blocks": ["임원 보고 자료"], "spawned_by": None, "source_utterance": None,
+        },
+        {
+            "name": "임원 보고 자료", "deadline": None, "size": "M",
+            "blocking": 0, "reentry": None, "muted": None, "needs_prep": True,
+            "context": ["실적보고서.xlsx"],
+            "blocks": [], "spawned_by": None, "source_utterance": None,
+        },
+        {
+            "name": "경비 정산", "deadline": None, "size": "S",
+            "blocking": 0, "reentry": None, "muted": None, "needs_prep": False,
+            "context": ["경비시스템"],
+            "blocks": [], "spawned_by": None, "source_utterance": None,
+        },
+        # 이 항목이 첫 카드가 되도록 짰다. 작아서 캘린더 상한을 통과하고, 오늘 마감이
+        # 있어 우선순위가 높고, `blocks`와 따뜻한 맥락이 둘 다 차 있어 `이유` 줄에
+        # 그래프가 드러난다. 그래프가 화면에 나오는 지점은 여기 하나뿐이다.
+        {
+            "name": "데이터 재수령 요청 메일", "deadline": today, "size": "S",
+            "blocking": 0, "reentry": None, "muted": None, "needs_prep": False,
+            "context": ["김팀장", "실적보고서.xlsx"],
+            "blocks": ["3분기 실적 보고서 초안"], "spawned_by": None, "source_utterance": None,
+        },
+        {
+            "name": "신입 온보딩 문서 업데이트", "deadline": None, "size": "M",
+            "blocking": 0, "reentry": None, "muted": None, "needs_prep": False,
+            "context": ["노션"],
+            "blocks": [], "spawned_by": None, "source_utterance": None,
+        },
+        {
+            "name": "회고 노트 정리", "deadline": None, "size": "S",
+            "blocking": 0, "reentry": None, "muted": None, "needs_prep": False,
+            "context": ["실적보고서.xlsx"],
+            "blocks": [], "spawned_by": "3분기 실적 보고서 초안", "source_utterance": None,
+        },
+    ]
+
+
+def cmd_seed(args):
+    """시연용 상태를 만든다. **제품 흐름이 아니라 데모 도구다.**
+
+    빈 상태에서는 카드가 언제나 콜드 스타트로 나와서 우선순위 엔진도 그래프도
+    화면에 드러나지 않는다. 심사자가 한 커맨드로 완성된 흐름을 볼 수 있게 한다.
+
+    기존 상태가 있으면 덮지 않는다 — 실제 사용자의 항목을 시연 데이터로 지우는 것이
+    이 커맨드가 낼 수 있는 유일한 큰 사고다. `--force`를 요구한다.
+    """
+    state = state_manager.load(args.state)
+
+    if state.get("open_items") and not args.force:
+        _output({
+            "build": BUILD,
+            "error": "state_not_empty",
+            "message": f"이미 항목이 {len(state['open_items'])}개 있다. 덮어쓰려면 --force",
+        })
+        sys.exit(1)
+
+    now = datetime.now()
+    today = now.strftime("%m-%d")
+
+    state["open_items"] = _demo_items(today)
+    state["open_card"] = None
+    state["active_token"] = None
+    # 직전에 완료한 항목. 이것의 맥락이 `따뜻한 맥락` 가점을 켠다.
+    state["completed"] = [{
+        "name": "실적 데이터 취합",
+        "completed_at": now.isoformat(),
+    }]
+    state["last_context"] = ["실적보고서.xlsx"]
+    state["rejection_log"] = []
+
+    # 캘린더 스냅샷도 함께 심는다. 커넥터 없이도 창 계산과 크기 상한이 보인다.
+    if args.busy_in is not None:
+        start = now + timedelta(minutes=args.busy_in)
+        end = start + timedelta(minutes=60)
+        state["calendar_snapshot"] = {
+            "fetched_at": now.isoformat(),
+            "clock_delta": 0.0,
+            "utc_offset": (now.astimezone().utcoffset() or timedelta()).total_seconds(),
+            "busy": [f"{start:%H:%M}~{end:%H:%M}"],
+        }
+        # 캘린더를 이미 받은 상태이므로 맨몸 `start`가 게이트에 걸리지 않는다.
+        state["calendar_prompted_at"] = now.isoformat()
+
+    _, mode, calibration, window = _session_context(state)
+
+    result = {
+        "build": BUILD,
+        "ok": True,
+        "seeded": [item["name"] for item in state["open_items"]],
+        "open_items_count": len(state["open_items"]),
+        "today_deadline_count": sum(1 for i in state["open_items"] if i.get("deadline") == today),
+        "last_context": state["last_context"],
+        "mode": mode,
+        "calibration": calibration,
+        "window": window,
+        "note": "시연용 데이터다. 지우려면 상태 파일을 삭제한다.",
+    }
+    _save(args.state, state, result)
+    _output(result)
+
+
 def cmd_status(args):
     state = state_manager.load(args.state)
     _, mode, _, window = _session_context(state)
@@ -531,6 +859,22 @@ def main():
     add_parser.add_argument("--first", action="store_true",
                              help="--next 와 함께 쓸 때 첫 카드 기준으로 고른다")
 
+    # schedule — 결선 이후. 사용자가 말한 일정을 캘린더에 등록할 준비를 한다.
+    # schedule_parser = subparsers.add_parser(
+    #     "schedule", help="사용자가 말한 일정을 캘린더에 등록할 준비 (검문 + 인자 조립)")
+    # schedule_parser.add_argument("--utterance",
+    #                               help="사용자 발화 원문. 없으면 만들지 않는다")
+    # schedule_parser.add_argument("--title", help="일정 제목. 발화에 근거가 있어야 한다")
+    # schedule_parser.add_argument("--start",
+    #                               help='시작 시각. 오프셋 붙인 ISO. 예: "2026-08-31T15:00:00+09:00"')
+    # schedule_parser.add_argument("--end",
+    #                               help=f"종료 시각. 없으면 {event_builder.DEFAULT_DURATION_MINUTES}분으로 두고 확인 문구에 표시한다")
+    # schedule_parser.add_argument("--now", help="현재 시각(오프셋 포함). 지난 시각 경고에 쓴다")
+    # schedule_parser.add_argument("--commit", action="store_true",
+    #                               help="등록이 끝난 뒤 기록한다. --token 이 필요하다")
+    # schedule_parser.add_argument("--token", help="schedule 이 발급한 일회용 토큰")
+    # schedule_parser.add_argument("--event-id", help="커넥터가 돌려준 이벤트 id")
+
     # open-card
     open_card_parser = subparsers.add_parser("open-card", help="카드 열기")
     open_card_parser.add_argument("item", help="항목 이름")
@@ -544,6 +888,13 @@ def main():
     # status
     subparsers.add_parser("status", help="현재 상태 요약")
 
+    # seed — 시연용. 제품 흐름이 아니다.
+    seed_parser = subparsers.add_parser("seed", help="시연용 항목·그래프·캘린더를 심는다")
+    seed_parser.add_argument("--force", action="store_true",
+                              help="기존 항목이 있어도 덮어쓴다")
+    seed_parser.add_argument("--busy-in", type=int, default=40,
+                              help="지금부터 N분 뒤에 60분짜리 일정을 둔다 (기본 40)")
+
     args = parser.parse_args()
 
     commands = {
@@ -552,11 +903,13 @@ def main():
         "pick": cmd_pick,
         "complete": cmd_complete,
         "add": cmd_add,
+        # "schedule": cmd_schedule,   # 결선 이후
         "reject": cmd_reject,
         "open-card": cmd_open_card,
         "close-card": cmd_close_card,
         "end-session": cmd_end_session,
         "status": cmd_status,
+        "seed": cmd_seed,
     }
 
     cmd_func = commands.get(args.command)

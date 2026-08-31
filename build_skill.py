@@ -49,6 +49,14 @@ REQUIRED = [
 # 있으면 함께 담지만 없어도 실패로 보지 않는다.
 OPTIONAL = ["README.md"]
 
+# 저장소에는 두지만 **패키지에는 담지 않는다.** 아직 배포하지 않는 기능이다.
+# 되살릴 때는 여기서 REQUIRED 로 옮기고, simple_tasks.py 와 SKILL.md 의
+# 짝이 되는 주석 블록을 함께 푼다.
+DEFERRED = [
+    # 일정 등록(캘린더 쓰기). 결선 이후 사용.
+    "scripts/event_builder.py",
+]
+
 # 사용자 상태와 빌드 부산물. 하나라도 새어 들어가면 실패로 본다.
 FORBIDDEN_PARTS = {"__pycache__", ".state", ".claude", ".git"}
 FORBIDDEN_SUFFIXES = {".pyc", ".pyo", ".zip", ".bak"}
@@ -74,6 +82,8 @@ def collect_sources():
             continue
         rel = path.relative_to(SKILL_DIR)
         if _is_forbidden(rel):
+            continue
+        if rel.as_posix() in DEFERRED:
             continue
         files.append((rel.as_posix(), path))
     return files
@@ -178,7 +188,9 @@ def main():
         problems, names = check_zip(ZIP_PATH, args.prefix)
         if problems:
             fail(problems)
-        print(f"[OK] {ZIP_PATH.name} — 파일 {len(names)}건, 필수 {len(REQUIRED)}건 모두 확인")
+        # 대시는 ASCII 하이픈으로 둔다. 윈도우 콘솔이 cp949면 `—` 하나에
+        # print가 죽고, 검증 커맨드가 통째로 못 쓰게 된다.
+        print(f"[OK] {ZIP_PATH.name} - 파일 {len(names)}건, 필수 {len(REQUIRED)}건 모두 확인")
         return
 
     files = collect_sources()

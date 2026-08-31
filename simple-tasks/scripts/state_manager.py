@@ -27,6 +27,14 @@ def _empty_state():
         # base64는 항목 이름을 모델에게서 가리려는 장치인데 여기엔 이름이 없다.
         # 일정 제목은 애초에 받지 않는다.
         "calendar_snapshot": None,
+        # 맨몸 `start`에 캘린더 절차를 돌려준 시각. 짧은 시간 안에 다시 맨몸으로
+        # 오면 그때는 막지 않고 카드를 낸다 (커넥터 없는 런타임 안전장치).
+        "calendar_prompted_at": None,
+        # 사용자 승인을 기다리는 일정 하나. 토큰 해시와 검문을 통과한 값이 들어 있다.
+        "pending_event": None,
+        # 캘린더에 등록한 일정 기록. 중복 등록을 막는 데 쓴다.
+        # 제목은 사용자 발화에서 온 것이라 항목 이름과 같은 방식으로 인코딩한다.
+        "scheduled_events": [],
     }
 
 
@@ -69,6 +77,14 @@ def load(path):
     state["active_token"] = data.get("active_token")
     state["last_context"] = codec.decode_list(data.get("last_context")) or []
     state["calendar_snapshot"] = data.get("calendar_snapshot")
+    state["calendar_prompted_at"] = data.get("calendar_prompted_at")
+    state["pending_event"] = data.get("pending_event")
+
+    # scheduled_events 디코딩. 제목만 인코딩돼 있다.
+    for entry in data.get("scheduled_events", []):
+        decoded = dict(entry)
+        decoded["summary"] = codec.decode_text(decoded.get("summary"))
+        state["scheduled_events"].append(decoded)
 
     # open_card 디코딩
     if data.get("open_card"):
@@ -112,7 +128,20 @@ def save(path, state):
         "active_token": state.get("active_token"),
         "last_context": codec.encode_list(state.get("last_context") or []),
         "calendar_snapshot": state.get("calendar_snapshot"),
+        # 캘린더 절차를 언제 돌려줬는지. 이게 저장되지 않으면 맨몸 `start`가
+        # 매번 게이트에 걸려 카드가 영영 안 나간다.
+        "calendar_prompted_at": state.get("calendar_prompted_at"),
+        "pending_event": state.get("pending_event"),
     }
+
+    # scheduled_events 인코딩. 제목은 발화에서 온 사용자 문자열이므로
+    # 항목 이름과 같은 방식으로 가린다. 시각에는 가릴 것이 없어 그대로 둔다.
+    encoded_events = []
+    for entry in state.get("scheduled_events", []):
+        encoded = dict(entry)
+        encoded["summary"] = codec.encode_text(encoded.get("summary"))
+        encoded_events.append(encoded)
+    data["scheduled_events"] = encoded_events
 
     # open_card 인코딩
     if state.get("open_card"):
