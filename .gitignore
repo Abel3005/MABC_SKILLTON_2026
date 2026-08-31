@@ -1,0 +1,16 @@
+# 사용자 상태 파일. 중간에 슬래시가 있는 패턴은 이 파일 위치 기준으로 앵커되므로
+# 하위 프로덕트 폴더까지 덮으려면 **/ 가 필요하다.
+**/scripts/.state/
+state.md
+state.md.bak
+todo.md
+
+# Python
+__pycache__/
+*.pyc
+
+# 로컬 설정
+**/.claude/settings.local.json
+
+# 업로드용 빌드 산출물
+/simple-tasks.zip
