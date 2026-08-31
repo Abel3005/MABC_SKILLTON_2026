@@ -121,12 +121,17 @@ def analyze(busy, now):
         if 0 <= elapsed <= RECENT_MINUTES:
             just_finished = elapsed
 
+    # 오늘 아직 안 끝난 일정 수. 진행 중인 것도 센다.
+    # 다음 일정 하나만 보이면 창이 왜 좁은지는 알아도 하루가 어떤 모양인지는 안 보인다.
+    remaining_today = sum(1 for s, e in busy if naive(e) > now_n)
+
     return {
         "next_start": next_start.strftime("%H:%M") if next_start else None,
         "minutes_free": minutes_free,
         "just_finished": just_finished,
         "ceiling": ceiling_for(minutes_free),
         "in_event": in_event,
+        "remaining_today": remaining_today,
     }
 
 
@@ -149,6 +154,7 @@ def empty_window():
         "just_finished": None,
         "ceiling": None,
         "in_event": False,
+        "remaining_today": None,
         "source": "none",
     }
 

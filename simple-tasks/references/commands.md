@@ -315,14 +315,35 @@ python scripts/simple_tasks.py start --now "2026-08-30T10:20:00+09:00" \
 
 ```json
 "window": {
-  "next_start": "11:00",      // 다음 일정 시각. 잔여 상태 줄 세 번째 칸
+  "next_start": "11:00",      // 다음 일정 시각
   "minutes_free": 40,          // 지금부터 다음 일정까지
   "just_finished": null,       // 직전 일정이 끝난 지 N분 (10분 이내일 때만)
   "ceiling": "small",          // 남은 시간이 정하는 크기 상한
   "in_event": false,
+  "remaining_today": 2,        // 오늘 아직 안 끝난 일정 수 (진행 중인 것 포함)
   "source": "calendar"         // "none"이면 캘린더 없음
 }
 ```
+
+### 반환하는 `situation`
+
+잔여 상태 두 줄에 들어갈 값 전부다. **여기에 항목 이름은 하나도 없다.**
+
+```json
+"situation": {
+  "open_count": 9,             // 첫 줄 — 일의 양
+  "today_deadline_count": 2,
+  "completed_today": 1,        //   0이면 칸을 뺀다
+  "clock": "11시 53분",         // 둘째 줄 — 시간의 모양. 이미 24시간제다
+  "minutes_free": 39,          //   null이면 칸을 뺀다
+  "next_start": "12:33",
+  "events_left_today": 2       //   0이거나 null이면 칸을 뺀다
+}
+```
+
+`open_count`·`today_deadline_count`는 세션 정보에도 같은 값이 있지만 **`situation` 안의 것을 쓴다.** 한 줄을 쓰는 데 두 곳을 보면 한쪽만 고쳤을 때 어긋난다.
+
+`clock`을 스크립트가 문자열로 만들어 주는 것은 절대 규칙 9(24시간제) 때문이다. 모델이 "오후 3시"로 쓰면 모드 표의 행을 잘못 고른다. 계산해서 주면 틀릴 여지가 없다.
 
 ### 제목을 받지 않는다
 

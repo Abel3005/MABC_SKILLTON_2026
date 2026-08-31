@@ -235,6 +235,46 @@ def _session_context(state):
     return now, mode, calibration, window
 
 
+def _situation(state, now, window):
+    """잔여 상태 두 줄에 들어갈 값 **전부**. 항목 이름은 하나도 담기지 않는다.
+
+    두 줄로 나눈 이유는 종류가 다르기 때문이다 — 첫 줄은 **일의 양**,
+    둘째 줄은 **시간의 모양**이다. 한 줄에 여섯 개를 늘어놓으면 읽는 데 3초가 넘고,
+    그러면 카드보다 요약을 읽는 시간이 길어진다.
+
+    **첫 줄이 `미처리`로 시작하는 것은 절대 규칙 1 때문이다.** 시각을 앞에 두면
+    응답의 첫 글자가 바뀐다. 시간 정보는 둘째 줄로 내린다.
+
+    `clock`을 문자열로 미리 만들어 주는 것은 규칙 9(24시간제) 때문이다. 모델이
+    "오후 3시"로 쓰면 아래 표의 행을 잘못 고른다. 계산해서 주면 틀릴 여지가 없다.
+    """
+    today = now.strftime("%m-%d")
+
+    # `completed_at`은 `harvest_processor`가 `"08-30 11:55"`로 쓴다. 마감과 같은
+    # `MM-DD` 접두사 비교를 쓴다 — `priority_engine._is_deadline_today`와 같은 방식이다.
+    # ISO로 파싱하면 이 형식이 통째로 걸러져 완료가 0으로 나온다.
+    completed_today = sum(
+        1 for done in (state.get("completed") or [])
+        if (done.get("completed_at") or "").startswith(today)
+    )
+
+    open_items = state.get("open_items") or []
+
+    return {
+        # 첫 줄 — 일의 양
+        "open_count": len(open_items),
+        "today_deadline_count": sum(
+            1 for i in open_items if (i.get("deadline") or "").startswith(today)
+        ),
+        "completed_today": completed_today,
+        # 둘째 줄 — 시간의 모양
+        "clock": f"{now.hour}시 {now.minute}분",
+        "minutes_free": window.get("minutes_free"),
+        "next_start": window.get("next_start"),
+        "events_left_today": window.get("remaining_today"),
+    }
+
+
 def _pick_with_token(state, is_first, just_harvested=None):
     """다음 항목을 고르고 토큰을 발급한다. state를 제자리에서 수정한다.
 
@@ -258,6 +298,7 @@ def _pick_with_token(state, is_first, just_harvested=None):
             "mode": mode,
             "calibration": calibration,
             "window": window,
+            "situation": _situation(state, now, window),
         }
 
     token = token_manager.generate()
@@ -270,6 +311,7 @@ def _pick_with_token(state, is_first, just_harvested=None):
     result["mode"] = mode
     result["calibration"] = calibration
     result["window"] = window
+    result["situation"] = _situation(state, now, window)
     result["token"] = token
     return result
 
@@ -296,6 +338,7 @@ def _token_for(state, item):
         "mode": mode,
         "calibration": calibration,
         "window": window,
+        "situation": _situation(state, now, window),
         "token": token,
     }
 
@@ -336,6 +379,7 @@ def cmd_start(args):
 
     session_info = session_controller.start_session(state, now=now)
     session_info["build"] = BUILD
+    session_info["situation"] = _situation(state, now, window)
     session_info["mode"] = mode
     session_info["calibration"] = calibration
     session_info["window"] = window
@@ -761,9 +805,11 @@ def cmd_seed(args):
     state["active_token"] = None
     # 직전에 완료한 항목. 이것의 맥락이 `따뜻한 맥락` 가점을 켠다.
     # "실손보험 청구"가 여기서 파생됐다(`spawned_by`).
+    # `completed_at` 형식은 harvest_processor 와 같아야 한다. ISO로 쓰면
+    # "오늘 완료" 집계가 이 항목을 놓친다.
     state["completed"] = [{
         "name": "치과 진료비 영수증 찾기",
-        "completed_at": now.isoformat(),
+        "completed_at": now.strftime("%m-%d %H:%M"),
     }]
     state["last_context"] = ["서류함", "보험앱"]
     state["rejection_log"] = []
