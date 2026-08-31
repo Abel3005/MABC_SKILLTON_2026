@@ -32,6 +32,9 @@ def _empty_state():
         "calendar_prompted_at": None,
         # 사용자 승인을 기다리는 일정 하나. 토큰 해시와 검문을 통과한 값이 들어 있다.
         "pending_event": None,
+        # 영역별 숙련도. { "<context 노드>": {"done":N,"too_big":N,"abandon":N} }
+        # 맥락 노드 이름은 항목 이름과 같은 성질이라 저장할 때 인코딩한다.
+        "domain_skill": {},
         # 캘린더에 등록한 일정 기록. 중복 등록을 막는 데 쓴다.
         # 제목은 사용자 발화에서 온 것이라 항목 이름과 같은 방식으로 인코딩한다.
         "scheduled_events": [],
@@ -79,6 +82,10 @@ def load(path):
     state["calendar_snapshot"] = data.get("calendar_snapshot")
     state["calendar_prompted_at"] = data.get("calendar_prompted_at")
     state["pending_event"] = data.get("pending_event")
+
+    # domain_skill 디코딩. 키(맥락 노드)만 인코딩돼 있다.
+    for key, val in (data.get("domain_skill") or {}).items():
+        state["domain_skill"][codec.decode_text(key)] = val
 
     # scheduled_events 디코딩. 제목만 인코딩돼 있다.
     for entry in data.get("scheduled_events", []):
@@ -132,6 +139,10 @@ def save(path, state):
         # 매번 게이트에 걸려 카드가 영영 안 나간다.
         "calendar_prompted_at": state.get("calendar_prompted_at"),
         "pending_event": state.get("pending_event"),
+    }
+
+    data["domain_skill"] = {
+        codec.encode_text(k): v for k, v in (state.get("domain_skill") or {}).items()
     }
 
     # scheduled_events 인코딩. 제목은 발화에서 온 사용자 문자열이므로

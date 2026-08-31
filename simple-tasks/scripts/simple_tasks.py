@@ -26,6 +26,7 @@ from scripts import token_manager
 from scripts import utterance_guard
 from scripts import item_matcher
 from scripts import calendar_window
+from scripts import grain_engine
 # from scripts import event_builder   # 결선 이후. 아래 "일정 등록" 주석 블록과 함께 푼다.
 
 
@@ -275,6 +276,30 @@ def _situation(state, now, window):
     }
 
 
+def _contexts_of(state, item_name):
+    """열린 항목의 맥락 노드. 완료/거부로 사라지기 전에 잡아 둬야 한다."""
+    for item in state.get("open_items") or []:
+        if item.get("name") == item_name:
+            return list(item.get("context") or [])
+    return []
+
+
+def _grain_for(state, item_name, contexts, calibration, window):
+    """이 항목에 줄 카드 굵기. 영역별 숙련도까지 반영한 최종 값이다.
+
+    `calibration`은 전역이고 이것은 항목별이다. 굵기를 카드 단위로 정하는 이유는
+    잘못 쪼갤 확률이 사람이 아니라 **사람 × 영역**에 붙기 때문이다.
+    """
+    decided = grain_engine.decide(
+        calibration["adjusted_size"],
+        state.get("domain_skill") or {},
+        contexts,
+        ceiling=window.get("ceiling"),
+    )
+    decided["on_stuck"] = grain_engine.on_stuck(decided["size"])
+    return decided
+
+
 def _pick_with_token(state, is_first, just_harvested=None):
     """다음 항목을 고르고 토큰을 발급한다. state를 제자리에서 수정한다.
 
@@ -312,6 +337,9 @@ def _pick_with_token(state, is_first, just_harvested=None):
     result["calibration"] = calibration
     result["window"] = window
     result["situation"] = _situation(state, now, window)
+    result["grain"] = _grain_for(
+        state, result["name"], _contexts_of(state, result["name"]), calibration, window,
+    )
     result["token"] = token
     return result
 
@@ -339,6 +367,9 @@ def _token_for(state, item):
         "calibration": calibration,
         "window": window,
         "situation": _situation(state, now, window),
+        "grain": _grain_for(
+            state, item["name"], list(item.get("context") or []), calibration, window,
+        ),
         "token": token,
     }
 
@@ -553,6 +584,9 @@ def cmd_complete(args):
     # 열린 카드 닫기
     session_controller.close_card(state)
 
+    # 맥락은 수확이 항목을 옮기기 전에 잡아 둔다. 옮기고 나면 못 찾는다.
+    contexts = _contexts_of(state, args.item)
+
     result = harvest_processor.harvest(
         state,
         args.item,
@@ -561,6 +595,9 @@ def cmd_complete(args):
     )
     state = result["state"]
     del result["state"]
+
+    # 이 영역에서 하나 해냈다. 숙련도 추정의 유일한 상향 입력이다.
+    grain_engine.record_done(state.setdefault("domain_skill", {}), contexts)
 
     if args.next:
         # 방금 수확한 항목 제외는 harvest가 붙이는 `묵힘` 표시가 담당한다.
@@ -581,11 +618,20 @@ def cmd_reject(args):
     # 열린 카드 닫기
     session_controller.close_card(state)
 
+    contexts = _contexts_of(state, args.item)
+
     result = session_controller.record_response(
         state, args.item, args.reason,
     )
     state = result["state"]
     del result["state"]
+
+    # 방금 기록된 사유를 그대로 쓴다. 매핑을 두 곳에 두면 한쪽만 고쳤을 때 어긋난다.
+    log = state.get("rejection_log") or []
+    if log:
+        grain_engine.record_reject(
+            state.setdefault("domain_skill", {}), contexts, log[-1].get("reason"),
+        )
 
     if args.next:
         result["card"] = _pick_with_token(state, is_first=False)
@@ -914,7 +960,7 @@ def main():
     reject_parser.add_argument("item", help="거부 항목 이름")
     reject_parser.add_argument("--token", required=True, help="pick에서 받은 토큰")
     reject_parser.add_argument("--reason", required=True,
-                                help="사유: too_big, abandon, done_partial, 또는 한국어 사유 문자열")
+                                help="사유: too_big, no_cue, abandon, done_partial, 또는 한국어 사유 문자열")
     reject_parser.add_argument("--next", action="store_true",
                                 help="이어서 다음 카드를 고르고 새 토큰을 함께 반환")
 

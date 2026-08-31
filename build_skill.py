@@ -34,6 +34,7 @@ REQUIRED = [
     "scripts/__init__.py",
     "scripts/calendar_window.py",
     "scripts/codec.py",
+    "scripts/grain_engine.py",
     "scripts/harvest_processor.py",
     "scripts/item_matcher.py",
     "scripts/mode_detector.py",

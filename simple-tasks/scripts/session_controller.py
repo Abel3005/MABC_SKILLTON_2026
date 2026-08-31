@@ -81,6 +81,9 @@ def record_response(state: dict, item_name: str, response: str,
         "other": reason or "그냥 아님",
         "abandon": "이탈",
         "done_partial": "하다 말았음",
+        # 크기는 맞는데 첫 동작이 안 떠오르는 경우. **크기 보정에 세지 않는다** —
+        # 분해가 아니라 `시작` 줄이 틀린 것이라 줄이면 엉뚱한 것을 고치게 된다.
+        "no_cue": "단서 없음",
     }
     reason_text = reason_map.get(response, response)
 
