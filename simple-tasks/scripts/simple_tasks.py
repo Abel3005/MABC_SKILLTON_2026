@@ -654,9 +654,15 @@ def cmd_add(args):
 
 
 def _demo_items(today):
-    """시연용 항목. 그래프 세 종류가 전부 한 번씩 드러나도록 짰다.
+    """시연용 항목.
 
-    - `context` 겹침 → 직전 완료 항목과 같은 파일을 쓰는 항목에 따뜻한 맥락 가점
+    **회사 일만 있는 목록은 이 제품의 실제 사용 맥락이 아니다.** 사람의 하루에는
+    보고서와 분리수거와 어머니 생신이 같은 목록에 섞여 있고, 뭘 먼저 할지 못 정하고
+    맴도는 이유가 바로 그 이질성이다. 그래서 업무·집안·관계·건강을 섞었다.
+
+    그래프 세 종류가 전부 한 번씩 드러나도록 짰다.
+
+    - `context` 겹침 → 직전 완료 항목과 같은 것을 쓰는 항목에 따뜻한 맥락 가점
     - `blocks`      → "이거 끝나면 무엇이 풀리는지"를 `이유` 줄에 이름으로 쓸 수 있다
     - `spawned_by`  → 수확이 만든 엣지
 
@@ -665,43 +671,65 @@ def _demo_items(today):
     """
     return [
         {
-            "name": "3분기 실적 보고서 초안", "deadline": today, "size": "L",
-            "blocking": 0, "reentry": "표 3번부터", "muted": None, "needs_prep": False,
-            "context": ["실적보고서.xlsx", "김팀장"],
-            "blocks": ["임원 보고 자료"], "spawned_by": None, "source_utterance": None,
+            "name": "주간 업무 보고서 마무리", "deadline": today, "size": "L",
+            "blocking": 0, "reentry": "이번 주 지표 표부터", "muted": None,
+            "needs_prep": False,
+            "context": ["주간보고.docx", "박팀장"],
+            "blocks": ["팀 회의 발표 자료"], "spawned_by": None, "source_utterance": None,
         },
         {
-            "name": "임원 보고 자료", "deadline": None, "size": "M",
+            "name": "팀 회의 발표 자료", "deadline": None, "size": "M",
             "blocking": 0, "reentry": None, "muted": None, "needs_prep": True,
-            "context": ["실적보고서.xlsx"],
-            "blocks": [], "spawned_by": None, "source_utterance": None,
-        },
-        {
-            "name": "경비 정산", "deadline": None, "size": "S",
-            "blocking": 0, "reentry": None, "muted": None, "needs_prep": False,
-            "context": ["경비시스템"],
+            "context": ["주간보고.docx"],
             "blocks": [], "spawned_by": None, "source_utterance": None,
         },
         # 이 항목이 첫 카드가 되도록 짰다. 작아서 캘린더 상한을 통과하고, 오늘 마감이
-        # 있어 우선순위가 높고, `blocks`와 따뜻한 맥락이 둘 다 차 있어 `이유` 줄에
-        # 그래프가 드러난다. 그래프가 화면에 나오는 지점은 여기 하나뿐이다.
+        # 있어 우선순위가 높고, 그래프 세 종류가 한 항목에 다 들어 있다 —
+        # 직전에 완료한 "치과 진료비 영수증 찾기"에서 파생됐고(`spawned_by`),
+        # 그 맥락을 물려받았고(`context` 겹침 → 따뜻한 맥락), 다음 것을 막고 있다(`blocks`).
+        # 영수증을 찾다가 "아 보험도 청구해야지"가 나오는 것은 실제로 일어나는 일이다.
         {
-            "name": "데이터 재수령 요청 메일", "deadline": today, "size": "S",
+            "name": "실손보험 청구", "deadline": today, "size": "S",
             "blocking": 0, "reentry": None, "muted": None, "needs_prep": False,
-            "context": ["김팀장", "실적보고서.xlsx"],
-            "blocks": ["3분기 실적 보고서 초안"], "spawned_by": None, "source_utterance": None,
+            "context": ["서류함", "보험앱"],
+            "blocks": ["치과 진료비 가계부 정리"],
+            "spawned_by": "치과 진료비 영수증 찾기", "source_utterance": None,
         },
         {
-            "name": "신입 온보딩 문서 업데이트", "deadline": None, "size": "M",
+            "name": "치과 진료비 가계부 정리", "deadline": None, "size": "S",
             "blocking": 0, "reentry": None, "muted": None, "needs_prep": False,
-            "context": ["노션"],
+            "context": ["가계부"],
             "blocks": [], "spawned_by": None, "source_utterance": None,
         },
         {
-            "name": "회고 노트 정리", "deadline": None, "size": "S",
+            "name": "어머니 생신 선물 고르기", "deadline": None, "size": "M",
             "blocking": 0, "reentry": None, "muted": None, "needs_prep": False,
-            "context": ["실적보고서.xlsx"],
-            "blocks": [], "spawned_by": "3분기 실적 보고서 초안", "source_utterance": None,
+            "context": ["어머니"],
+            "blocks": ["생신 카드 쓰기"], "spawned_by": None, "source_utterance": None,
+        },
+        {
+            "name": "생신 카드 쓰기", "deadline": None, "size": "S",
+            "blocking": 0, "reentry": None, "muted": None, "needs_prep": False,
+            "context": ["어머니"],
+            "blocks": [], "spawned_by": None, "source_utterance": None,
+        },
+        {
+            "name": "건강검진 예약 전화", "deadline": None, "size": "S",
+            "blocking": 0, "reentry": None, "muted": None, "needs_prep": False,
+            "context": ["병원"],
+            "blocks": [], "spawned_by": None, "source_utterance": None,
+        },
+        {
+            "name": "분리수거", "deadline": None, "size": "S",
+            "blocking": 0, "reentry": None, "muted": None, "needs_prep": False,
+            "context": ["베란다"],
+            "blocks": [], "spawned_by": None, "source_utterance": None,
+        },
+        {
+            "name": "전세 계약 만기 확인", "deadline": None, "size": "M",
+            "blocking": 0, "reentry": None, "muted": None, "needs_prep": False,
+            "context": ["서류함"],
+            "blocks": [], "spawned_by": None, "source_utterance": None,
         },
     ]
 
@@ -732,22 +760,30 @@ def cmd_seed(args):
     state["open_card"] = None
     state["active_token"] = None
     # 직전에 완료한 항목. 이것의 맥락이 `따뜻한 맥락` 가점을 켠다.
+    # "실손보험 청구"가 여기서 파생됐다(`spawned_by`).
     state["completed"] = [{
-        "name": "실적 데이터 취합",
+        "name": "치과 진료비 영수증 찾기",
         "completed_at": now.isoformat(),
     }]
-    state["last_context"] = ["실적보고서.xlsx"]
+    state["last_context"] = ["서류함", "보험앱"]
     state["rejection_log"] = []
 
     # 캘린더 스냅샷도 함께 심는다. 커넥터 없이도 창 계산과 크기 상한이 보인다.
+    # 하루에 일정이 하나뿐인 사람은 드물어서 오후 것도 함께 둔다 — 다음 일정만
+    # 보이면 창이 왜 좁은지는 알아도 하루가 어떤 모양인지는 안 보인다.
     if args.busy_in is not None:
         start = now + timedelta(minutes=args.busy_in)
         end = start + timedelta(minutes=60)
+        later_start = end + timedelta(minutes=150)
+        later_end = later_start + timedelta(minutes=30)
         state["calendar_snapshot"] = {
             "fetched_at": now.isoformat(),
             "clock_delta": 0.0,
             "utc_offset": (now.astimezone().utcoffset() or timedelta()).total_seconds(),
-            "busy": [f"{start:%H:%M}~{end:%H:%M}"],
+            "busy": [
+                f"{start:%H:%M}~{end:%H:%M}",
+                f"{later_start:%H:%M}~{later_end:%H:%M}",
+            ],
         }
         # 캘린더를 이미 받은 상태이므로 맨몸 `start`가 게이트에 걸리지 않는다.
         state["calendar_prompted_at"] = now.isoformat()
